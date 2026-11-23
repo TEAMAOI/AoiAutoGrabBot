@@ -1,0 +1,50 @@
+{
+  "name": "Grabber Userbot",
+  "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram and Grabber Vercel API.",
+  "repository": "https://github.com/OWNER/REPO",
+  "keywords": ["python", "telegram-userbot", "pyrogram", "kurigram", "auto-grabber"],
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID from https://my.telegram.org",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API Hash from https://my.telegram.org",
+      "required": true
+    },
+    "SESSION_STRING": {
+      "description": "Pyrogram/Kurigram String Session for your Telegram account",
+      "required": true
+    },
+    "API_BASE_URL": {
+      "description": "Grabber Vercel Backend API base URL",
+      "value": "https://grabapi.vercel.app",
+      "required": false
+    },
+    "GRAB_DELAY": {
+      "description": "Delay in seconds before sending the grab command",
+      "value": "4.0",
+      "required": false
+    },
+    "BOT_SYNC_INTERVAL": {
+      "description": "Interval in seconds to auto-refresh supported bots from API /bots",
+      "value": "300.0",
+      "required": false
+    },
+    "TAG_BOT_IN_COMMAND": {
+      "description": "Send /cmd@BotUsername name (true) or /cmd name (false)",
+      "value": "true",
+      "required": false
+    },
+    "LOG_LEVEL": {
+      "description": "Logging level (INFO, DEBUG, WARNING)",
+      "value": "INFO",
+      "required": false
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
