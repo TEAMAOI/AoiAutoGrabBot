@@ -1,7 +1,7 @@
 {
   "name": "Grabber Userbot",
   "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram and MongoDB.",
-  "repository": "https://github.com/TEAMAOI/Auto",
+  "repository": "https://github.com/TEAMAOI/AoiAutoGrabBot",
   "keywords": ["python", "telegram-userbot", "pyrogram", "kurigram", "mongodb", "auto-grabber"],
   "env": {
     "API_ID": {

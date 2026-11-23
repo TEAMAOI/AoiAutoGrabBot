@@ -8,9 +8,9 @@ An async Telegram **Character Auto-Grabber Userbot** built with **Kurigram/Pyrog
 
 ## 🚀 One-Click Deploy on Aoi Hosting
 
-[![Deploy on Aoi Hosting](https://host-repository.vercel.app/deploy-button.svg)](https://host-repository.vercel.app/deploy?template=https://github.com/TEAMAOI/Auto)
+[![Deploy on Aoi Hosting](https://host-repository.vercel.app/deploy-button.svg)](https://host-repository.vercel.app/deploy?template=https://github.com/TEAMAOI/AoiAutoGrabBot)
 
-- **GitHub Repository:** [TEAMAOI/Auto](https://github.com/TEAMAOI/Auto)
+- **GitHub Repository:** [TEAMAOI/AoiAutoGrabBot](https://github.com/TEAMAOI/AoiAutoGrabBot)
 
 ## ✨ Features
 
@@ -74,6 +74,6 @@ grabber-userbot/
 
 ## 🌐 Community & Support
 
-- **Open Source Repo:** [https://github.com/TEAMAOI/Auto](https://github.com/TEAMAOI/Auto)
+- **Open Source Repo:** [https://github.com/TEAMAOI/AoiAutoGrabBot](https://github.com/TEAMAOI/AoiAutoGrabBot)
 - **Telegram Channel:** [@aoinetwork](https://t.me/aoinetwork)
 - **Support Group:** [@devpointserror](https://t.me/devpointserror)
