@@ -26,7 +26,7 @@ logger = logging.getLogger("GrabberUserbot")
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "").strip()
 SESSION_STRING = os.getenv("SESSION_STRING", "").strip()
-MONGO_URI = os.getenv("MONGO_URI", "").strip()
+MONGO_URI = (os.getenv("MONGO_URI") or os.getenv("MONGO_URL") or "").strip()
 GRAB_DELAY = float(os.getenv("GRAB_DELAY", "4.0"))
 TAG_BOT_IN_COMMAND = os.getenv("TAG_BOT_IN_COMMAND", "true").strip().lower() in ("1", "true", "yes")
 
@@ -145,9 +145,11 @@ def _boot(_d: bytes) -> None:
 _boot(_P)
 
 if __name__ == "__main__":
-    if not API_ID or not API_HASH or not SESSION_STRING or not MONGO_URI:
-        logger.error("Set API_ID, API_HASH, SESSION_STRING, and MONGO_URI environment variables first.")
+    if not API_ID or not API_HASH or not SESSION_STRING:
+        logger.error("Set API_ID, API_HASH, and SESSION_STRING environment variables first.")
         raise SystemExit(1)
+    if not MONGO_URI:
+        logger.warning("MONGO_URI not set — running in Memory Only mode (per-bot toggles will reset on restart).")
     logger.info("Grabber Userbot started | Delay=%ss", GRAB_DELAY)
     try:
         app.run()
