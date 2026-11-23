@@ -27,7 +27,7 @@
     },
     "GRAB_DELAY": {
       "description": "Delay in seconds before sending the grab command",
-      "value": "4.0",
+      "value": "1.0",
       "required": false
     },
     "TAG_BOT_IN_COMMAND": {
