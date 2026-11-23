@@ -1,4 +1,6 @@
 kurigram
 tgcrypto
 aiohttp
+pymongo
+dnspython
 python-dotenv

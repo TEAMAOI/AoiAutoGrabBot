@@ -1,8 +1,8 @@
 {
   "name": "Grabber Userbot",
-  "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram.",
-  "repository": "https://github.com/OWNER/REPO",
-  "keywords": ["python", "telegram-userbot", "pyrogram", "kurigram", "auto-grabber"],
+  "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram and MongoDB.",
+  "repository": "https://github.com/TEAMAOI/Auto",
+  "keywords": ["python", "telegram-userbot", "pyrogram", "kurigram", "mongodb", "auto-grabber"],
   "env": {
     "API_ID": {
       "description": "Telegram API ID from https://my.telegram.org",
@@ -14,6 +14,10 @@
     },
     "SESSION_STRING": {
       "description": "Pyrogram/Kurigram String Session for your Telegram account",
+      "required": true
+    },
+    "MONGO_URI": {
+      "description": "Your own MongoDB connection URI (stores enabled/disabled bot preferences)",
       "required": true
     },
     "GRAB_DELAY": {

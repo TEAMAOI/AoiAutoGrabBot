@@ -1,6 +1,6 @@
 {
   "name": "Grabber Userbot",
-  "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram.",
+  "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram and MongoDB.",
   "branch": "main",
   "start_command": "python3 userbot.py",
   "requirements_file": "requirements.txt",
@@ -25,9 +25,15 @@
       "required": true,
       "secret": true
     },
+    "MONGO_URI": {
+      "description": "Your own MongoDB Atlas connection string (saves per-bot ON/OFF settings)",
+      "placeholder": "mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority",
+      "required": true,
+      "secret": true
+    },
     "GRAB_DELAY": {
       "description": "Delay in seconds before sending the grab command",
-      "value": "1.0",
+      "value": "4.0",
       "required": false
     },
     "TAG_BOT_IN_COMMAND": {

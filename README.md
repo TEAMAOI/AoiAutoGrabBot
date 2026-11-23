@@ -4,24 +4,33 @@
   <img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif">
 </p>
 
-An async Telegram **Character Auto-Grabber Userbot** built with **Kurigram/Pyrogram** and **aiohttp**.
+An async Telegram **Character Auto-Grabber Userbot** built with **Kurigram/Pyrogram**, **aiohttp**, and **MongoDB**.
 
 ## 🚀 One-Click Deploy on Aoi Hosting
 
-[![Deploy on Aoi Hosting](https://host-repository.vercel.app/deploy-button.svg)](https://host-repository.vercel.app/deploy?template=https://github.com/TeamAoi/Auto)
+[![Deploy on Aoi Hosting](https://host-repository.vercel.app/deploy-button.svg)](https://host-repository.vercel.app/deploy?template=https://github.com/TEAMAOI/Auto)
 
-> **Note:** After pushing this repo to GitHub, replace `OWNER/REPO` in the button URL above (and in `app.json`) with your actual GitHub `username/repo`.
+- **GitHub Repository:** [TEAMAOI/Auto](https://github.com/TEAMAOI/Auto)
 
 ## ✨ Features
 
+- **Per-Bot ON/OFF Control (MongoDB Persistent)**: All bots start **OFF** by default. Enable only the bots you want with `.on <username>` and disable anytime with `.off <username>` — saved safely in your own MongoDB.
 - **Automatic Multi-Bot Support**: Syncs supported bots and their special spawn commands automatically.
-- **Strict Spawn Verification**: Ignores unsupported bots and normal bot media unless the caption contains that bot's special command.
+- **Strict Spawn Verification**: Ignores disabled bots, unsupported bots, and normal bot media unless the caption contains that bot's special command.
 - **Photo, Video & GIF Support**: Automatically identifies both image and video/GIF character spawns.
-- **Live Self-Commands**:
-  - `.stats` — Shows alive status, session grabs, and supported working bots.
-  - `.grab on` / `.grab off` — Enable or pause auto-grabbing live.
-  - `.syncbots` — Force-refresh the supported bots list.
-  - `.testapi` — Reply to any character photo/video to test character lookup directly.
+
+## 📜 Commands
+
+| Command | Description |
+| :--- | :--- |
+| `.help` | Show all commands and repository link |
+| `.stats` | Show alive status, session grabs, and your enabled bots |
+| `.botslist` | List all supported working bots with their `ON` / `OFF` status |
+| `.on <username>` | Enable auto-grab for a specific bot (or `.on all`) |
+| `.off <username>` | Disable auto-grab for a specific bot (or `.off all`) |
+| `.grab on` / `.grab off` | Master switch to enable or pause auto-grabbing |
+| `.syncbots` | Force-refresh the supported bots list |
+| `.testapi` | Reply to any character photo/video to test lookup |
 
 ## 📁 Project Structure
 
@@ -33,7 +42,7 @@ grabber-userbot/
 ├── Dockerfile        # Docker container config
 ├── Procfile          # Worker process declaration
 ├── runtime.txt       # Python runtime version
-├── requirements.txt  # Minimal Python dependencies
+├── requirements.txt  # Python dependencies
 ├── .env.example      # Environment variable template
 └── README.md         # Setup & deployment guide
 ```
@@ -45,7 +54,7 @@ grabber-userbot/
    pip install -r requirements.txt
    ```
 2. **Configure environment variables**:
-   Copy `.env.example` to `.env` and fill in `API_ID`, `API_HASH`, and `SESSION_STRING`.
+   Copy `.env.example` to `.env` and fill in `API_ID`, `API_HASH`, `SESSION_STRING`, and `MONGO_URI`.
 3. **Run the userbot**:
    ```bash
    python3 userbot.py
@@ -58,11 +67,13 @@ grabber-userbot/
 | `API_ID` | Yes | — | Telegram API ID from [my.telegram.org](https://my.telegram.org) |
 | `API_HASH` | Yes | — | Telegram API Hash from [my.telegram.org](https://my.telegram.org) |
 | `SESSION_STRING` | Yes | — | Pyrogram/Kurigram String Session |
+| `MONGO_URI` | Yes | — | Your own MongoDB URI for saving per-bot ON/OFF settings |
 | `GRAB_DELAY` | No | `4.0` | Delay in seconds before sending grab command |
 | `TAG_BOT_IN_COMMAND` | No | `true` | Send `/cmd@BotUsername name` (`true`) or `/cmd name` (`false`) |
 | `LOG_LEVEL` | No | `INFO` | Logging verbosity (`INFO`, `DEBUG`, `WARNING`) |
 
 ## 🌐 Community & Support
 
+- **Open Source Repo:** [https://github.com/TEAMAOI/Auto](https://github.com/TEAMAOI/Auto)
 - **Telegram Channel:** [@aoinetwork](https://t.me/aoinetwork)
 - **Support Group:** [@devpointserror](https://t.me/devpointserror)
