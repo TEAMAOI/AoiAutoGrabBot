@@ -1,6 +1,6 @@
 {
   "name": "Grabber Userbot",
-  "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram and Grabber Vercel API.",
+  "description": "Async Telegram Character Auto-Grabber Userbot powered by Kurigram/Pyrogram.",
   "repository": "https://github.com/OWNER/REPO",
   "keywords": ["python", "telegram-userbot", "pyrogram", "kurigram", "auto-grabber"],
   "env": {
@@ -16,19 +16,9 @@
       "description": "Pyrogram/Kurigram String Session for your Telegram account",
       "required": true
     },
-    "API_BASE_URL": {
-      "description": "Grabber Vercel Backend API base URL",
-      "value": "https://grabapi.vercel.app",
-      "required": false
-    },
     "GRAB_DELAY": {
       "description": "Delay in seconds before sending the grab command",
       "value": "4.0",
-      "required": false
-    },
-    "BOT_SYNC_INTERVAL": {
-      "description": "Interval in seconds to auto-refresh supported bots from API /bots",
-      "value": "300.0",
       "required": false
     },
     "TAG_BOT_IN_COMMAND": {
